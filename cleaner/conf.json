@@ -1,0 +1,12 @@
+{
+  "ConnectTimeout": 10,
+  "DBAddress": "127.0.0.1",
+  "DBName": "msghub",
+  "DBPassword": "fmttm233",
+  "DBPort": "3306",
+  "DBUsername": "root",
+  "MailApplicationName": "Cleaner",
+  "MailEnable": false,
+  "QueueTableName": "pic_task_queue",
+  "QueueTaskTimeout": 1800
+}

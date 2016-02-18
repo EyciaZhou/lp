@@ -1,0 +1,37 @@
+{
+	"ConnectTimeout": 10,
+	"DBAddress": "127.0.0.1",
+	"DBPassword": "fmttm233",
+	"DBPort": "3306",
+	"DBName": "msghub",
+	"DBUsername": "root",
+	"RootPath": "/home/eycia/pictures/img1/",
+	"ThreadNoTaskSleepTime": 20,
+	"ThreadNumber": 5,
+	"ThreadStartDelay": 1,
+  	"NumberOfEachFetchTask" : 5,
+  	"QueueTableName" : "pic_task_queue",
+	"TypeAcceptable": [
+		"image/png",
+		"image/jpeg",
+	  	"image/jpg",
+		"image/gif"
+	],
+  	"TypeExtName" : [
+	  "png",
+	  "jpg",
+	  "jpg",
+	  "gif"
+	],
+
+  	"NodeID" : 1,
+
+	"MailEnable" : "false",
+	"MailSMTPAddress" : "smtp.gmail.com",
+	"MailSMTPPort" : 587,
+	"MailFrom" : "from@gmail.com",
+	"MailTo" : "to@gmail.com",
+	
+	"MailUsername" : "from@gmail.com",
+	"MailPassword" : "frompwd"
+}
