@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"git.eycia.me/eycia/configparser"
+	"github.com/EyciaZhou/configparser"
 	_ "github.com/go-sql-driver/mysql"
 	log "github.com/Sirupsen/logrus"
 	"github.com/zbindenren/logrus_mail"
@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"runtime"
 )
 
 //fmttm tss
@@ -162,7 +163,7 @@ func downloadAndStoreTask(uid int, nodeNum int) {
 				continue
 			}
 
-			_, err = finishStmt.Exec(nodeNum, id)
+			_, err = finishStmt.Exec(nodeNum, extName, id)
 
 			if err != nil {
 				log.WithFields(log.Fields{"thread id": uid, "picture id":id}).Errorf("Failed to finish task ID : [%s], REASON : [%s]", id, err.Error())
@@ -179,7 +180,7 @@ func downloadAndStoreTask(uid int, nodeNum int) {
 }
 
 type Config struct {
-	RootPath string `default:"/data/pictures/img1/"`
+	RootPath string `default:"/data/pic"`
 
 	NodeID int `default:"0"`
 
@@ -220,6 +221,7 @@ func loadConfig() {
 
 	//load
 	configparser.AutoLoadConfig("downloader", &config)
+	configparser.ToJson(&config)
 
 	if config.RootPath[len(config.RootPath)-1] != '/' {
 		config.RootPath += "/"
@@ -242,6 +244,8 @@ var (
 )
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	loadConfig()
 
 	//progress connect client
@@ -300,7 +304,7 @@ func main() {
 
 	finishStmt, err = db.Prepare(fmt.Sprintf(`
     UPDATE %s
-        SET status = 2, nodenum = ?
+        SET status = 2, nodenum = ?, ext = ?
         WHERE id = ?;
 	`, config.QueueTableName))
 

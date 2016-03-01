@@ -12,8 +12,8 @@ someday, so i decides write server myself
 */
 
 type Config struct {
-	RootPath string `default:"/home/eycia/pictures/img1/"`
-	ListenPort string `default:"8080"`
+	RootPath string `default:"/data/pic"`
+	ListenPort string `default:":8080"`
 }
 
 var (

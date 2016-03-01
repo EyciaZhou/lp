@@ -26,7 +26,7 @@
 
   	"NodeID" : 1,
 
-	"MailEnable" : "false",
+	"MailEnable" : false,
 	"MailSMTPAddress" : "smtp.gmail.com",
 	"MailSMTPPort" : 587,
 	"MailFrom" : "from@gmail.com",
