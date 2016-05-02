@@ -7,16 +7,14 @@ import (
 	"github.com/EyciaZhou/configparser"
 	_ "github.com/go-sql-driver/mysql"
 	log "github.com/Sirupsen/logrus"
-	"github.com/zbindenren/logrus_mail"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 	"runtime"
+	"github.com/EyciaZhou/picRouter/readsizer"
 )
-
-//fmttm tss
 
 //------------------------------------------Download Machine-----------------------------------------
 var (
@@ -34,9 +32,7 @@ func writeToDisk(rc io.ReadCloser, fn string) error {
 	buf := make([]byte, 32*1024)
 
 	_, err = io.CopyBuffer(file, rc, buf)
-/*
-	_, err = bufio.NewWriter(file).ReadFrom(rc)
-*/
+
 	if err != nil {
 		return err
 	}
@@ -47,6 +43,22 @@ var (
 	db     *sql.DB
 	client *http.Client
 )
+
+/*ResponseToReadSizer:
+	convert http.Response.Body to a ReadSizer, won't invoke Close
+
+	if Response including ContentLength in HEAD, will use that number as size,
+	read all bytes of body to measure the size and store these bytes to buff for read otherwise
+
+	to avoiding the infinite body, limit body size to 10MB here
+ */
+func ResponseToReadSizer(resp *http.Response) (readsizer.ReadSizer, error) {
+	r := readsizer.NewSizeLimitReader(resp.Body, 100*readsizer.MB)
+	if resp.ContentLength < 0 {
+		return readsizer.NewSizeReader(r)
+	}
+	return readsizer.NewSizeReaderWithSize(r, resp.ContentLength)
+}
 
 func GetPictureReturnsReader(url string) (io.ReadCloser, string, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -88,97 +100,6 @@ func GetPictureReturnsReader(url string) (io.ReadCloser, string, error) {
 	return resp.Body, extName, nil
 }
 
-func downloadAndStoreTask(uid int, nodeNum int) {
-	log.WithField("thread id", uid).Info("Thread started")
-
-	var URL string
-	var id string
-
-	//------------------------ process ----------------------
-	for {
-		result, err := updateStmt.Exec(uid)
-
-		if err != nil {
-			log.WithField("thread id", uid).Error("Failed to update REASON : ", err.Error())
-			continue
-		}
-
-		if n, err := result.RowsAffected(); err != nil {
-			log.WithField("thread id", uid).Error("Failed to get RowsAffected REASON :", err.Error())
-			continue
-		} else if n == 0 {
-			//太烦 log.WithField("thread id", uid).Infof("No task Thread %d sleep %ds", uid, config.ThreadNoTaskSleepTime)
-			time.Sleep(time.Second * (time.Duration)(config.ThreadNoTaskSleepTime))
-			continue
-		}
-
-		rows, err := selectStmt.Query(uid)
-
-		rowsUrl := make([]string, 0, config.NumberOfEachFetchTask)
-		rowsId := make([]string, 0, config.NumberOfEachFetchTask)
-
-		if err != nil {
-			log.Error("Failed to get rows!!!! REASON : ", err.Error())
-			rows.Close()
-			continue
-		}
-
-		log.WithField("thread id", uid).Info("get rows successfully")
-
-		p := 0
-		for rows.Next() {
-			if err := rows.Scan(&URL, &id); err != nil {
-				log.WithField("thread id", uid).Error("Failed to scan url or/and id REASON : ", err.Error())
-				rows.Close()
-				continue
-			}
-			rowsUrl = append(rowsUrl, URL)
-			rowsId = append(rowsId, id)
-			p++
-		}
-		if err := rows.Err(); err != nil {
-			log.WithField("thread id", uid).Error("rows returns error REASON : ", err.Error())
-		}
-		rows.Close()
-
-		for i := 0; i < p; i++ {
-			URL = rowsUrl[i]
-			id = rowsId[i]
-
-			log.WithFields(log.Fields{"thread id": uid, "picture id":id}).Info("Start to download ", URL)
-
-			reader, extName, err := GetPictureReturnsReader(URL)
-			if err != nil {
-				log.WithFields(log.Fields{"thread id": uid, "picture id":id}).Errorf("Failed to download URL : [%s], REASON : [%s]", URL, err.Error())
-				_, _ = errorStmt.Exec(id)
-				continue
-			}
-
-			fn := path+id+"."+extName
-			err = writeToDisk(reader, fn)
-
-			if err != nil {
-				log.WithFields(log.Fields{"thread id": uid, "picture id":id}).Errorf("Failed to write to disk PATH : [%s], REASON : [%s]", path+id+"."+extName, err.Error())
-				_, _ = errorStmt.Exec(id)
-				continue
-			}
-
-			_, err = finishStmt.Exec(nodeNum, extName, id)
-
-			if err != nil {
-				log.WithFields(log.Fields{"thread id": uid, "picture id":id}).Errorf("Failed to finish task ID : [%s], REASON : [%s]", id, err.Error())
-				os.Remove(fn)
-				_, _ = errorStmt.Exec(id)
-				continue
-			}
-
-			log.WithFields(log.Fields{"thread id": uid, "picture id":id}).Info("Finished download ", URL)
-		}
-	}
-
-	//almost there
-}
-
 type Config struct {
 	RootPath string `default:"/data/pic"`
 
@@ -201,17 +122,6 @@ type Config struct {
 	TypeExtName    []string `default:"[\"png\", \"jpg\", \"gif\"]"`
 
 	ConnectTimeout int `default:"10"` //with second
-
-	MailEnable bool `default:"false"`
-
-	MailApplicationName string `default:"IMGDownloader"`
-	MailSMTPAddress     string `default:"127.0.0.1"`
-	MailSMTPPort        int    `default:"25"`
-	MailFrom            string `default:"fake@fake.com"`
-	MailTo              string `default:"recv@fake.com"`
-
-	MailUsername string `default:"nomailusername"`
-	MailPassword string `default:"nomailpassword"`
 }
 
 var config Config
@@ -251,19 +161,6 @@ func main() {
 	//progress connect client
 	client = &http.Client{
 		Timeout: time.Duration(time.Second * (time.Duration)(config.ConnectTimeout)),
-	}
-
-	//process log's mail sending
-	if config.MailEnable {
-		mailhook_auth, err := logrus_mail.NewMailAuthHook(config.MailApplicationName, config.MailSMTPAddress, config.MailSMTPPort, config.MailFrom, config.MailTo,
-			config.MailUsername, config.MailPassword)
-
-		if err == nil {
-			log.AddHook(mailhook_auth)
-			log.Error("Don't Worry, just for send a email to test")
-		} else {
-			log.Error("Can't Hook mail, ERROR:", err.Error())
-		}
 	}
 
 	//generate sql session
