@@ -14,22 +14,17 @@ const (
 	GB
 )
 
-type SizeLimitReader struct {
+type sizeLimitedReader struct {
 	r io.Reader
 	limit int64
 	cnt int64
 }
 
-func NewSizeLimitReader(r io.Reader, limit int64) *SizeLimitReader {
-	return &SizeLimitReader{r, limit, 0}
+func newSizeLimitedReader(r io.Reader, limit ByteSize) *sizeLimitedReader {
+	return &sizeLimitedReader{r, (int64)(limit), 0}
 }
 
-type ReadSizer interface {
-	io.Reader
-	Size() int64
-}
-
-func (p *SizeLimitReader) Read(b []byte) (n int, err error) {
+func (p *sizeLimitedReader) Read(b []byte) (n int, err error) {
 	n, err = p.r.Read(b)
 	if err != nil {
 		return
@@ -41,30 +36,49 @@ func (p *SizeLimitReader) Read(b []byte) (n int, err error) {
 	return
 }
 
-type MemoryReadSizer struct {
-	r bytes.Reader
-	size int64
+type ReadCloseSizer interface {
+	io.ReadCloser
+	Size() int64
 }
 
-func NewSizeReader(r io.Reader) (*ReadSizer, error) {
-	if rs, ok := r.(ReadSizer); ok {
-		return rs, nil
-	}
-
+func NewReadCloseSizerByMeasureSize(r io.Reader, MaxMeansureSize ByteSize) (ReadCloseSizer, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
 
-	n, err := buf.ReadFrom(r)
+	n, err := buf.ReadFrom(newSizeLimitedReader(r, MaxMeansureSize))
 	if err != nil {
 		return nil, err
 	}
 
-	return &MemoryReadSizer { buf, n }, nil
+	return NewRCSFromR(r, n, func()error { return nil }), nil
 }
 
-func NewSizeReaderWithSize(r io.Reader, size int64) (*ReadSizer, error) {
-	return &MemoryReadSizer{ r, size }, nil
+func NewRCSFromRC(r io.ReadCloser, size int64) ReadCloseSizer {
+	return &_RCSFromRC{ r, size }
 }
 
-func (p *MemoryReadSizer) Size() (int64) {
+type _RCSFromRC struct {
+	io.ReadCloser
+	size int64
+}
+
+func (p *_RCSFromRC) Size() int64 {
+	return p.size
+}
+
+func NewRCSFromR(r io.Reader, size int64, closeFunc func()error) (ReadCloseSizer) {
+	return &_RCSFromR { r, size, closeFunc }
+}
+
+type _RCSFromR struct {
+	io.Reader
+	size int64
+	closeFunc func()error
+}
+
+func (p *_RCSFromR) Close() error {
+	return p.closeFunc()
+}
+
+func (p *_RCSFromR) Size() int64 {
 	return p.size
 }

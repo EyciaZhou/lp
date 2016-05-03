@@ -7,7 +7,7 @@ import (
 )
 
 type QiniuUploader struct {
-	bucket string `default:"msghub-picture"`
+	Bucket string `default:"msghub-picture"`
 	c *kodo.Client
 	policy *kodo.PutPolicy
 }

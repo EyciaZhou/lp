@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-type PicPipe interface {
+type PicTaskPipe interface {
 	/*ErrorTask
 		if errors when process the task, invoke this method
  	*/
@@ -53,24 +53,24 @@ func (p *MySQLDialInfo) Dial() (*sql.DB, error) {
 	return db, nil
 }
 
-type MySQLPicPipe struct {
+type MySQLPicTaskPipe struct {
 	db *sql.DB
 
 	id string
 }
 
-func NewMySQLPicPipeUseConnectedDB(db *sql.DB) (*MySQLPicPipe, error) {
+func NewMySQLPicPipeUseConnectedDB(db *sql.DB) (*MySQLPicTaskPipe, error) {
 	uuid, err := uuid.NewV4()
 	if err != nil {
-		nil, err
+		return nil, err
 	}
-	return &MySQLPicPipe{
+	return &MySQLPicTaskPipe{
 		db : db,
 		id: uuid.String(),
-	}
+	}, nil
 }
 
-func NewMySQLPicPipe(dinfo *MySQLDialInfo) (*MySQLPicPipe, error) {
+func NewMySQLPicPipe(dinfo *MySQLDialInfo) (*MySQLPicTaskPipe, error) {
 	db, err := dinfo.Dial()
 	if err != nil {
 		return nil, err
@@ -89,6 +89,7 @@ type Task struct {
 type TaskFinished struct {
 	Task
 
+	NodeType string
 	NodeName string
 	MIMEInfo string
 }
@@ -96,7 +97,7 @@ type TaskFinished struct {
 /*ErrorTask
 if errors when process the task, invoke this method
  */
-func (p *MySQLPicPipe) ErrorTask(task *Task) error {
+func (p *MySQLPicTaskPipe) ErrorTask(task *Task) error {
 	_, err := p.db.Exec(`
 	UPDATE %s
         	SET status = 3
@@ -107,12 +108,12 @@ func (p *MySQLPicPipe) ErrorTask(task *Task) error {
 /*FinishTask
 if task process finished, invoke this method
  */
-func (p *MySQLPicPipe) FinishTask(task *TaskFinished) error {
+func (p *MySQLPicTaskPipe) FinishTask(task *TaskFinished) error {
 	_, err := p.db.Exec(`
 		UPDATE pic_task_queue
-        		SET status = 2, nodenum = ?, ext = ?
+        		SET status = 2, nodetype = ?, nodenum = ?, ext = ?
         		WHERE id = ?;
-	`, task.NodeName, task.MIMEInfo, task.Key)
+	`, task.NodeType, task.NodeName, task.MIMEInfo, task.Key)
 	return err
 }
 
@@ -121,7 +122,7 @@ func (p *MySQLPicPipe) FinishTask(task *TaskFinished) error {
 	if no available task, return nil, and no error.
 	fetch limits in p.conf, owner set to p's uuid.
  */
-func (p *MySQLPicPipe) GetTasks(limit int) ([]*Task, error) {
+func (p *MySQLPicTaskPipe) GetTasks(limit int) ([]*Task, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -169,7 +170,7 @@ func (p *MySQLPicPipe) GetTasks(limit int) ([]*Task, error) {
 	return result[:cnt], nil
 }
 
-func (p *MySQLPicPipe) UpsertTask(url string) (*Task, error) {
+func (p *MySQLPicTaskPipe) UpsertTask(url string) (*Task, error) {
 	rowAffect, err := p.db.Exec(`
 	INSERT INTO
 			pic_task_queue (url, status, owner)
@@ -182,7 +183,7 @@ func (p *MySQLPicPipe) UpsertTask(url string) (*Task, error) {
 		return nil, err
 	}
 
-	var id string
+	var id int64
 
 	if n, _ := rowAffect.RowsAffected(); n > 0 {	//new insert
 		id, _ = rowAffect.LastInsertId()
