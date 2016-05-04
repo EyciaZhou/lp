@@ -8,7 +8,7 @@ type Storer interface {
 	StorerType() string
 	StorerKey() string
 
-	Store(r readsizer.ReadCloseSizer, key string) error
+	Store(r readsizer.ReadSizer, key string) error
 	StoreFile(fn string, key string) error
 }
 
@@ -22,8 +22,7 @@ func (p *QiniuStorer) StorerKey() string {
 	return p.Bucket
 }
 
-func (p *QiniuStorer) Store(r readsizer.ReadCloseSizer, key string) error {
-	defer r.Close()
+func (p *QiniuStorer) Store(r readsizer.ReadSizer, key string) error {
 	return (* qiniu.QiniuUploader)(p).Upload(r, r.Size(), key)
 }
 
@@ -31,6 +30,14 @@ func (p *QiniuStorer) StoreFile(fn string, key string) error {
 	return (* qiniu.QiniuUploader)(p).UploadFile(fn, key)
 }
 
-func NewQiniuStorer(AccessKey string, SecretKey string, Bucket string) (*QiniuStorer) {
-	return (* QiniuStorer)(qiniu.NewQiniuUploader(AccessKey, SecretKey, Bucket))
+type QiniuStorerConf struct {
+	AccessKey string
+	SecretKey string
+	Bucket string
+}
+
+func NewQiniuStorer(conf *QiniuStorerConf) (*QiniuStorer) {
+	return (* QiniuStorer)(qiniu.NewQiniuUploader(
+		conf.AccessKey, conf.SecretKey, conf.Bucket,
+	))
 }

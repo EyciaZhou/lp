@@ -36,49 +36,32 @@ func (p *sizeLimitedReader) Read(b []byte) (n int, err error) {
 	return
 }
 
-type ReadCloseSizer interface {
-	io.ReadCloser
+type ReadSizer interface {
+	io.Reader
 	Size() int64
 }
 
-func NewReadCloseSizerByMeasureSize(r io.Reader, MaxMeansureSize ByteSize) (ReadCloseSizer, error) {
+func ReadCloserToReadSizer(r io.ReadCloser, MaxMeasureSize ByteSize) (ReadSizer, error) {
+	defer r.Close()
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
 
-	n, err := buf.ReadFrom(newSizeLimitedReader(r, MaxMeansureSize))
+	n, err := buf.ReadFrom(newSizeLimitedReader(r, MaxMeasureSize))
 	if err != nil {
 		return nil, err
 	}
 
-	return NewRCSFromR(r, n, func()error { return nil }), nil
+	return newRSFromR(buf, n), nil
 }
 
-func NewRCSFromRC(r io.ReadCloser, size int64) ReadCloseSizer {
-	return &_RCSFromRC{ r, size }
+func newRSFromR(r io.Reader, size int64) (ReadSizer) {
+	return &_RSFromR { r, size }
 }
 
-type _RCSFromRC struct {
-	io.ReadCloser
-	size int64
-}
-
-func (p *_RCSFromRC) Size() int64 {
-	return p.size
-}
-
-func NewRCSFromR(r io.Reader, size int64, closeFunc func()error) (ReadCloseSizer) {
-	return &_RCSFromR { r, size, closeFunc }
-}
-
-type _RCSFromR struct {
+type _RSFromR struct {
 	io.Reader
 	size int64
-	closeFunc func()error
 }
 
-func (p *_RCSFromR) Close() error {
-	return p.closeFunc()
-}
-
-func (p *_RCSFromR) Size() int64 {
+func (p *_RSFromR) Size() int64 {
 	return p.size
 }

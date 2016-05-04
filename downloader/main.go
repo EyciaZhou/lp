@@ -1,222 +1,118 @@
 package main
 
 import (
-	"errors"
+	"github.com/EyciaZhou/configparser"
 	"github.com/EyciaZhou/picRouter/PicPipe"
-	"github.com/EyciaZhou/picRouter/readsizer"
-	"net/http"
-	"strings"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
+	"github.com/Sirupsen/logrus"
+	"sync"
 )
 
-/*responseToReadCloseSizer:
-convert http.Response.Body to a ReadCloseSizer
+type Config struct {
+	DBAddress  string `default:"127.0.0.1"`
+	DBPort     string `default:"3306"`
+	DBName     string `default:"msghub"`
+	DBUsername string `default:"root"`
+	DBPassword string `default:"fmttm233"`
 
-if Response including ContentLength in HEAD, will use that number as size,
-read all bytes from body to measure the size and store these bytes to buff for reading otherwise
+	TaskFetchLimit                    int `default:"10"`
+	SleepDurationWhenFetchErrorOrNull int `default:"60"`
+	HttpConnectionTryTimes            int `default:"5"`
+	HttpTimeout                       int `default:"60"`
 
-to avoiding the infinite body, limit body size to 10MB here
-*/
-func responseToReadCloseSizer(resp *http.Response) (readsizer.ReadCloseSizer, error) {
-	if resp.ContentLength < 0 {
-		return readsizer.NewReadCloseSizerByMeasureSize(resp.Body, 10*readsizer.MB)
-	}
-	return readsizer.NewRCSFromRC(resp.Body, resp.ContentLength), nil
+	QiniuAccessKey string `default:"fake"`
+	QiniuSecretKey string `default:"fake"`
+	QiniuBucket    string `default:"msghub-picture"`
 }
 
-type StorePipeCtxConfig struct {
-	conf_TaskFetchLimit                    int
-	conf_SleepDurationWhenFetchErrorOrNull time.Duration
-	conf_HttpConnectionTryTimes            int
-	conf_HttpTimeout                       time.Duration
+func HandleSIGTERM(c chan os.Signal, whenDone func()) {
+	_ = <-c
+	whenDone()
 }
 
-type StorePipeCtx struct {
-	StorePipeCtxConfig
-	done chan struct{}
+func loadConf() (*pic.MySQLDialInfo, *pic.QiniuStorerConf, *pic.StorePipeCtxConfig) {
+	var Conf Config
+	configparser.AutoLoadConfig("downloader", &Conf)
 
-	httpClient http.Client
-
-	taskPipe pic.PicTaskPipe
-	storer   pic.Storer
-}
-
-func NewStorePipeCtx(conf StorePipeCtxConfig, picTaskPipe pic.PicTaskPipe, storer pic.Storer) StorePipeCtx {
-	return &StorePipeCtx{
-		conf,
-		make(chan struct{}),
-		http.Client{
-			Timeout:conf.conf_HttpTimeout,
+	return &pic.MySQLDialInfo{
+			Conf.DBAddress, Conf.DBPort, Conf.DBName,
+			Conf.DBUsername, Conf.DBPassword,
 		},
-		picTaskPipe,
-		storer,
+		&pic.QiniuStorerConf{
+			Conf.QiniuAccessKey,
+			Conf.QiniuSecretKey,
+			Conf.QiniuBucket,
+		},
+		&pic.StorePipeCtxConfig{
+			Conf.TaskFetchLimit,
+			(time.Duration)(Conf.SleepDurationWhenFetchErrorOrNull) * time.Second,
+			Conf.HttpConnectionTryTimes,
+			(time.Duration)(Conf.HttpTimeout) * time.Second,
+		}
+}
+
+func handleError(errc <-chan error) {
+	for err := range errc {
+		logrus.Error(err.Error())
 	}
 }
 
-func (p *StorePipeCtx) Stop() {
-	close(p.done)
-}
+func fanInTask(bufLen int, cs ...chan *pic.Task) chan *pic.Task {
+	c := make(chan *pic.Task, bufLen)
 
-func (p *StorePipeCtx) State_FinishTask(input chan<- *pic.TaskFinished, errc <-chan error)  {
-	for task := range input {
-		err := p.taskPipe.FinishTask(task)
-		if err != nil {
+	var wg sync.WaitGroup
+	out := make(chan int)
+
+	output := func(c <-chan int) {
+		defer wg.Done()
+		for n := range c {
 			select {
-			case errc <- err:
-			case <-p.done:
+			case out <- n:
+			case <-done:
 				return
 			}
 		}
 	}
-}
 
-func (p *StorePipeCtx) State_ErrorTask(input chan<- *pic.Task, errc <-chan error) {
-	for task := range input {
-		err := p.taskPipe.ErrorTask(task)
-		if err != nil {
-			select {
-			case errc <- err:
-			case <-p.done:
-				return
-			}
-		}
+	wg.Add(len(cs))
+	for _, c := range cs {
+		go output(c)
 	}
-}
 
-func (p *StorePipeCtx) State_GetTask(out chan<- *pic.Task, errc <-chan error) {
+	// Start a goroutine to close out once all the output goroutines are
+	// done.  This must start after the wg.Add call.
 	go func() {
-		for {
-			tasks, err := p.taskPipe.GetTasks(p.conf_TaskFetchLimit)
-			if err != nil || tasks == nil || len(tasks) == 0 {
-				select {
-				case errc <- err:
-				case <-p.done:
-					return
-				}
-
-				select {
-				case <-time.After(p.conf_SleepDurationWhenFetchErrorOrNull):
-				case <-p.done:
-					return
-				}
-				continue
-			}
-			for _, task := range tasks {
-				select {
-				case out <- task:
-				case <-p.done:
-					return
-				}
-			}
-		}
+		wg.Wait()
+		close(out)
 	}()
+	return out
 }
 
-const (
-	_USER_AGENT = `Mozilla/5.0 (Linux; Android 4.3; Nexus 7 Build/JSS15Q) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2307.2 Safari/537.36`
-)
+func buildNetwork(spc *pic.StorePipeCtx) {
 
-func (p *StorePipeCtx) getResp(task *pic.Task) (resp *http.Response, e error) {
-	req, err := http.NewRequest("GET", task.URL, nil)
+}
+
+func main() {
+	confMySql, confQiniu, confSPC := loadConf()
+
+	picTaskPipe, err := pic.NewMySQLPicPipe(confMySql)
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("User-Agent", _USER_AGENT)
-
-	for try := 0; try < p.conf_HttpConnectionTryTimes; try++ {
-		resp, err = p.httpClient.Do(req)
-		if err == nil {
-			break
-		}
-	}
-	return
-}
-
-var (
-	acceptContentType = []string{
-		"application/x-jpe", "image/jpg", "image/jpeg",
-		"image/png", "application/x-png",
-		"image/gif",
-	}
-	contentTypeWashed = []string{
-		"image/jpeg", "image/jpeg", "image/jpeg",
-		"image/png", "image/png",
-		"image/gif",
-	}
-)
-
-func (p *StorePipeCtx) judgeContentType(ContentType string) string {
-	if ContentType == "" {
-		return ""
+		panic(err)
 	}
 
-	for i, typ := range acceptContentType {
-		if strings.HasPrefix(ContentType, typ) {
-			return contentTypeWashed[i]
-		}
+	storer := pic.NewQiniuStorer(confQiniu)
+	if err != nil {
+		panic(err)
 	}
 
-	return ""
-}
+	spc := pic.NewStorePipeCtx(confSPC, picTaskPipe, storer)
 
-func (p *StorePipeCtx) State_Store(input <-chan *pic.Task, finish chan<- *pic.TaskFinished, rollback chan<- *pic.Task, errc <-chan error) {
-	handleError := func(task *pic.Task, err error) bool {
-		select {
-		case rollback <- task:
-		case <-p.done:
-			return true
-		}
+	spc.BuildNetwork(10, )
 
-		select {
-		case errc <- err:
-		case <-p.done:
-			return true
-		}
-
-		return false
-	}
-
-	go func() {
-		for task := range input {
-			resp, err := p.getResp(task)
-			if err != nil {
-				if handleError(task, err) {
-					return
-				}
-				continue
-			}
-
-			washedMIMEType := p.judgeContentType(resp.Header.Get("Content-Type"))
-			if washedMIMEType == "" {
-				if handleError(task, errors.New("not allowed Content-Type")) {
-					return
-				}
-				continue
-			}
-
-			rcs, err := responseToReadCloseSizer(resp)
-			if err != nil {
-				if handleError(task, err) {
-					return
-				}
-				continue
-			}
-
-			err = p.storer.Store(rcs, task.Key)
-			if err != nil {
-				if handleError(task, err) {
-					return
-				}
-				continue
-			}
-
-			select {
-			case <-p.done:
-				return
-			case finish <- &pic.TaskFinished{
-				*task, p.storer.StorerType(), p.storer.StorerKey(), washedMIMEType,
-			}:
-			}
-		}
-	}()
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGTERM)
+	go HandleSIGTERM(c, func(){ spc.Stop() })
 }
