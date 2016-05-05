@@ -3,12 +3,10 @@ package main
 import (
 	"github.com/EyciaZhou/configparser"
 	"github.com/EyciaZhou/picRouter/PicPipe"
+	"github.com/Sirupsen/logrus"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
-	"github.com/Sirupsen/logrus"
-	"sync"
 )
 
 type Config struct {
@@ -23,14 +21,21 @@ type Config struct {
 	HttpConnectionTryTimes            int `default:"5"`
 	HttpTimeout                       int `default:"60"`
 
+	BufLen_tasks          int `default:"5"`
+	BufLen_fetched        int `default:"5"`
+	BufLen_errc           int `default:"5"`
+	BufLen_finishQueue    int `default:"5"`
+	BufLen_errorTaskQueue int `default:"2"`
+
+	Cnt_StateFinishTask int `default:"10"`
+	Cnt_StateErrorTask  int `default:"2"`
+	Cnt_StateGetTask    int `default:"10"`
+	Cnt_StateStore      int `default:"10"`
+	Cnt_StateFetch      int `default:"10"`
+
 	QiniuAccessKey string `default:"fake"`
 	QiniuSecretKey string `default:"fake"`
 	QiniuBucket    string `default:"msghub-picture"`
-}
-
-func HandleSIGTERM(c chan os.Signal, whenDone func()) {
-	_ = <-c
-	whenDone()
 }
 
 func loadConf() (*pic.MySQLDialInfo, *pic.QiniuStorerConf, *pic.StorePipeCtxConfig) {
@@ -51,48 +56,13 @@ func loadConf() (*pic.MySQLDialInfo, *pic.QiniuStorerConf, *pic.StorePipeCtxConf
 			(time.Duration)(Conf.SleepDurationWhenFetchErrorOrNull) * time.Second,
 			Conf.HttpConnectionTryTimes,
 			(time.Duration)(Conf.HttpTimeout) * time.Second,
+
+			Conf.BufLen_tasks, Conf.BufLen_fetched,	Conf.BufLen_errc,
+			Conf.BufLen_finishQueue, Conf.BufLen_errorTaskQueue,
+
+			Conf.Cnt_StateFinishTask, Conf.Cnt_StateErrorTask, Conf.Cnt_StateGetTask,
+			Conf.Cnt_StateStore, Conf.Cnt_StateFetch,
 		}
-}
-
-func handleError(errc <-chan error) {
-	for err := range errc {
-		logrus.Error(err.Error())
-	}
-}
-
-func fanInTask(bufLen int, cs ...chan *pic.Task) chan *pic.Task {
-	c := make(chan *pic.Task, bufLen)
-
-	var wg sync.WaitGroup
-	out := make(chan int)
-
-	output := func(c <-chan int) {
-		defer wg.Done()
-		for n := range c {
-			select {
-			case out <- n:
-			case <-done:
-				return
-			}
-		}
-	}
-
-	wg.Add(len(cs))
-	for _, c := range cs {
-		go output(c)
-	}
-
-	// Start a goroutine to close out once all the output goroutines are
-	// done.  This must start after the wg.Add call.
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-	return out
-}
-
-func buildNetwork(spc *pic.StorePipeCtx) {
-
 }
 
 func main() {
@@ -110,9 +80,16 @@ func main() {
 
 	spc := pic.NewStorePipeCtx(confSPC, picTaskPipe, storer)
 
-	spc.BuildNetwork(10, )
-
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGTERM)
-	go HandleSIGTERM(c, func(){ spc.Stop() })
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		_ = <- c
+		spc.Stop()
+	}()
+
+	spc.SetErrorProcessor(func(err error) { logrus.Error(err.Error()) })
+
+	spc.BuildNetwork()
+
+	spc.Loop()
 }
