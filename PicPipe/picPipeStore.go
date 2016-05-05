@@ -241,10 +241,12 @@ func (p *StorePipeCtx) State_GetTask() {
 	for {
 		tasks, err := p.taskPipe.GetTasks(p.Conf_TaskFetchLimit)
 		if err != nil || tasks == nil || len(tasks) == 0 {
-			select {
-			case p.errc <- err:
-			case <-p.done:
-				return
+			if err != nil {
+				select {
+				case p.errc <- err:
+				case <-p.done:
+					return
+				}
 			}
 
 			select {

@@ -1,10 +1,10 @@
 package pic
 import (
 	"database/sql"
-	"github.com/nu7hatch/gouuid"
 	_"github.com/go-sql-driver/mysql"
 	"fmt"
 	"strconv"
+	"github.com/nu7hatch/gouuid"
 )
 
 type PicTaskPipe interface {
@@ -55,19 +55,12 @@ func (p *MySQLDialInfo) Dial() (*sql.DB, error) {
 
 type MySQLPicTaskPipe struct {
 	db *sql.DB
-
-	id string
 }
 
-func NewMySQLPicPipeUseConnectedDB(db *sql.DB) (*MySQLPicTaskPipe, error) {
-	uuid, err := uuid.NewV4()
-	if err != nil {
-		return nil, err
-	}
+func NewMySQLPicPipeUseConnectedDB(db *sql.DB) (*MySQLPicTaskPipe) {
 	return &MySQLPicTaskPipe{
 		db : db,
-		id: uuid.String(),
-	}, nil
+	}
 }
 
 func NewMySQLPicPipe(dinfo *MySQLDialInfo) (*MySQLPicTaskPipe, error) {
@@ -75,7 +68,7 @@ func NewMySQLPicPipe(dinfo *MySQLDialInfo) (*MySQLPicTaskPipe, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewMySQLPicPipeUseConnectedDB(db)
+	return NewMySQLPicPipeUseConnectedDB(db), nil
 }
 
 /*Task
@@ -99,7 +92,7 @@ if errors when process the task, invoke this method
  */
 func (p *MySQLPicTaskPipe) ErrorTask(task *Task) error {
 	_, err := p.db.Exec(`
-	UPDATE %s
+	UPDATE pic_task_queue
         	SET status = 3
         	WHERE id = ?;`, task.Key)
 	return err
@@ -127,12 +120,19 @@ func (p *MySQLPicTaskPipe) GetTasks(limit int) ([]*Task, error) {
 		return nil, nil
 	}
 
+	uuid, err := uuid.NewV4()
+	if err != nil {
+		return nil, err
+	}
+
+	owner := uuid.String()
+
 	//step 1, update sql, effect records but not return them, because can't finish this in one statement
 	updateRst, err := p.db.Exec(`
 		UPDATE pic_task_queue
 			SET status = 1, owner = ?, time = CURRENT_TIMESTAMP, trytimes = trytimes + 1
 			WHERE status = 0 AND owner = 0
-			LIMIT ?;`, p.id, limit)
+			LIMIT ?;`, owner, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (p *MySQLPicTaskPipe) GetTasks(limit int) ([]*Task, error) {
 	//step 2, select effected records, and return them
 	tasks, err := p.db.Query(
 		`SELECT url, id from pic_task_queue
-			WHERE status = 1 AND owner = ?;`, p.id)
+			WHERE status = 1 AND owner = ?;`, owner)
 	if err != nil {
 		return nil, err
 	}
